@@ -2,6 +2,7 @@ package bdb
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
 	"os"
@@ -31,7 +32,7 @@ func ParseHashPage(data []byte, swapped bool) (*HashPage, error) {
 	return &hashPage, nil
 }
 
-func HashPageValueContent(db *os.File, pageData []byte, hashPageIndex uint16, pageSize uint32, swapped bool) ([]byte, error) {
+func HashPageValueContent(ctx context.Context, db *os.File, pageData []byte, hashPageIndex uint16, pageSize uint32, swapped bool) ([]byte, error) {
 	// the first byte is the page type, so we can peek at it first before parsing further...
 	valuePageType := pageData[hashPageIndex]
 
@@ -50,37 +51,41 @@ func HashPageValueContent(db *os.File, pageData []byte, hashPageIndex uint16, pa
 	var hashValue []byte
 
 	for currentPageNo := entry.PageNo; currentPageNo != 0; {
-		pageStart := pageSize * currentPageNo
+		select {
+		case <-ctx.Done():
+			return nil, xerrors.Errorf("timeout for parse page")
+		default:
+			pageStart := pageSize * currentPageNo
 
-		_, err := db.Seek(int64(pageStart), io.SeekStart)
-		if err != nil {
-			return nil, xerrors.Errorf("failed to seek to HashPageValueContent (page=%d): %w", currentPageNo, err)
+			_, err := db.Seek(int64(pageStart), io.SeekStart)
+			if err != nil {
+				return nil, xerrors.Errorf("failed to seek to HashPageValueContent (page=%d): %w", currentPageNo, err)
+			}
+
+			currentPageBuff, err := slice(db, int(pageSize))
+			if err != nil {
+				return nil, xerrors.Errorf("failed to read page=%d: %w", currentPageNo, err)
+			}
+
+			currentPage, err := ParseHashPage(currentPageBuff, swapped)
+			if err != nil {
+				return nil, xerrors.Errorf("failed to parse page=%d: %w", currentPageNo, err)
+			}
+			if currentPage.PageType != OverflowPageType {
+				currentPageNo = currentPage.NextPageNo
+				continue
+			}
+			var hashValueBytes []byte
+			if currentPage.NextPageNo == 0 {
+				// this is the last page, the whole page contains content
+				hashValueBytes = currentPageBuff[PageHeaderSize : PageHeaderSize+currentPage.FreeAreaOffset]
+			} else {
+				hashValueBytes = currentPageBuff[PageHeaderSize:]
+			}
+			hashValue = append(hashValue, hashValueBytes...)
+
+			currentPageNo = currentPage.NextPageNo
 		}
-
-		currentPageBuff, err := slice(db, int(pageSize))
-		if err != nil {
-			return nil, xerrors.Errorf("failed to read page=%d: %w", currentPageNo, err)
-		}
-
-		currentPage, err := ParseHashPage(currentPageBuff, swapped)
-		if err != nil {
-			return nil, xerrors.Errorf("failed to parse page=%d: %w", currentPageNo, err)
-		}
-		if currentPage.PageType != OverflowPageType {
-			continue
-		}
-
-		var hashValueBytes []byte
-		if currentPage.NextPageNo == 0 {
-			// this is the last page, the whole page contains content
-			hashValueBytes = currentPageBuff[PageHeaderSize : PageHeaderSize+currentPage.FreeAreaOffset]
-		} else {
-			hashValueBytes = currentPageBuff[PageHeaderSize:]
-		}
-
-		hashValue = append(hashValue, hashValueBytes...)
-
-		currentPageNo = currentPage.NextPageNo
 	}
 
 	return hashValue, nil

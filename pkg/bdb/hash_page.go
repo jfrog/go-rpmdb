@@ -71,18 +71,20 @@ func HashPageValueContent(ctx context.Context, db *os.File, pageData []byte, has
 		case <-ctx.Done():
 			return nil, xerrors.Errorf("timeout for parse page")
 		default:
-			if currentPage.PageType == OverflowPageType {
-				var hashValueBytes []byte
-				if currentPage.NextPageNo == 0 {
-					// this is the last page, the whole page contains content
-					hashValueBytes = currentPageBuff[PageHeaderSize : PageHeaderSize+currentPage.FreeAreaOffset]
-				} else {
-					hashValueBytes = currentPageBuff[PageHeaderSize:]
-				}
-				hashValue = append(hashValue, hashValueBytes...)
+			if currentPage.PageType != OverflowPageType {
+				currentPageNo = currentPage.NextPageNo
+				continue
 			}
-			currentPageNo = currentPage.NextPageNo
+			var hashValueBytes []byte
+			if currentPage.NextPageNo == 0 {
+				// this is the last page, the whole page contains content
+				hashValueBytes = currentPageBuff[PageHeaderSize : PageHeaderSize+currentPage.FreeAreaOffset]
+			} else {
+				hashValueBytes = currentPageBuff[PageHeaderSize:]
+			}
+			hashValue = append(hashValue, hashValueBytes...)
 		}
+		currentPageNo = currentPage.NextPageNo
 	}
 
 	return hashValue, nil

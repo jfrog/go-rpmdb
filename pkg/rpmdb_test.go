@@ -1,7 +1,9 @@
 package rpmdb
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -759,4 +761,29 @@ func TestRpmDB_Package(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestCorruptedPackage(t *testing.T) {
+	db, err := Open("testdata/corrupted/Packages")
+	require.NoError(t, err)
+	_, err = db.ListPackages()
+	assert.Error(t, err, "failed to parse")
+}
+
+func TestCorruptedPackageWithTimeout(t *testing.T) {
+	db, err := Open("testdata/corrupted/Packages")
+	require.NoError(t, err)
+	ctxWithTimeout, cancel := context.WithTimeout(context.Background(), 5*time.Microsecond)
+	defer cancel()
+	_, err = db.ListPackagesWithContext(ctxWithTimeout)
+	assert.Equal(t, "timeout for parse page", err.Error())
+}
+
+func TestCorruptedPackageWithContext(t *testing.T) {
+	db, err := Open("testdata/corrupted/Packages")
+	require.NoError(t, err)
+	ctxWithTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = db.ListPackagesWithContext(ctxWithTimeout)
+	assert.Error(t, err, "failed to parse")
 }
